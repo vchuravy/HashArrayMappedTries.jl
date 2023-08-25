@@ -8,6 +8,7 @@ using HashArrayMappedTries
 
     dict[1] = 1
     @test dict[1] == 1
+    @test get(dict, 2, 1) == 1
 
     # persistent
     dict2 = HAMT(dict, 1, 2)

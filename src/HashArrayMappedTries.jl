@@ -45,6 +45,26 @@ function Base.getindex(node::Node{K,V}, key::K) where {K,V}
     return leaf.val
 end
 
+function Base.get(node::Node{K,V}, key::K, default::V) where {K,V}
+    hash = Base.hash(key)
+    level = UInt(0)
+    while !(node isa Leaf{K,V})
+        i = entry_index(hash, level)
+        if isset(node, i)
+            node = @inbounds node.data[i]
+        else
+            return default
+        end
+        level += 1
+    end
+    leaf = node::Leaf{K,V}
+    if Base.hash(leaf.key) !== hash
+        return default
+    end
+    return leaf.val
+end
+
+
 function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
     hash = Base.hash(key)
     level = UInt(0)
@@ -119,7 +139,7 @@ function Node(node::Node{K, V}, key::K, val::V) where {K, V}
         else
             @inbounds node.data[i] = Leaf{K, V}(key, val)
             set!(node, i)
-            return
+            return persistent
         end
         level += 1
         @assert level <= MAX_LEVEL
