@@ -1,4 +1,4 @@
-module HashArrayMapTries
+module HashArrayMappedTries
 
 const ENTRY_COUNT = UInt(32)
 const NBITS = sizeof(UInt) * 8

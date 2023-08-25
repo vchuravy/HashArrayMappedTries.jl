@@ -1,5 +1,5 @@
 using Test
-using HashArrayMapTries
+using HashArrayMappedTries
 
 @testset "basics" begin
     dict = HAMT{Int, Int}()
@@ -10,7 +10,7 @@ using HashArrayMapTries
     @test dict[1] == 1
 
     # persistent
-    dict2 = HashArrayMapTries.get(dict, 1, 2)
+    dict2 = HashArrayMappedTries.get(dict, 1, 2)
     @test dict[1] == 1
     @test dict2[1] == 2
 
