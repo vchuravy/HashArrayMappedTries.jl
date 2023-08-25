@@ -10,7 +10,7 @@ using HashArrayMappedTries
     @test dict[1] == 1
 
     # persistent
-    dict2 = HashArrayMappedTries.get(dict, 1, 2)
+    dict2 = HAMT(dict, 1, 2)
     @test dict[1] == 1
     @test dict2[1] == 2
 

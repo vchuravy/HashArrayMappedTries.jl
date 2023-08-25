@@ -97,7 +97,7 @@ function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
 end
 
 # persistent
-function get(node::Node{K, V}, key::K, val::V) where {K, V}
+function Node(node::Node{K, V}, key::K, val::V) where {K, V}
     hash = Base.hash(key)
     level = UInt(0)
 
