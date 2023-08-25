@@ -9,9 +9,10 @@ const MAX_LEVEL = UInt(NBITS ÷ BITS_PER_LEVEL - 1) # inclusive
 
 entry_index(hash::UInt, level::UInt) = UInt((hash >> (level * BITS_PER_LEVEL)) & LEVEL_MASK) + 1
 
-mutable struct Leaf{K, V}
+mutable struct Leaf{K, V} # todo test immutable
     const key::K
     const val::V
+    const hash::UInt # cache
 end
 
 mutable struct Node{K, V}
@@ -39,7 +40,7 @@ function Base.getindex(node::Node{K,V}, key::K) where {K,V}
         level += 1
     end
     leaf = node::Leaf{K,V}
-    if Base.hash(leaf.key) !== hash
+    if leaf.hash !== hash
         throw(KeyError(key))
     end
     return leaf.val
@@ -58,7 +59,7 @@ function Base.get(node::Node{K,V}, key::K, default::V) where {K,V}
         level += 1
     end
     leaf = node::Leaf{K,V}
-    if Base.hash(leaf.key) !== hash
+    if leaf.hash !== hash
         return default
     end
     return leaf.val
@@ -77,7 +78,7 @@ function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
             previous_i = i
             node = @inbounds node.data[i]
         else
-            @inbounds node.data[i] = Leaf{K, V}(key, val)
+            @inbounds node.data[i] = Leaf{K, V}(key, val, hash)
             set!(node, i)
             return
         end
@@ -86,10 +87,10 @@ function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
     end
     leaf = node::Leaf{K,V}
     # check if keys are ident
-    if Base.hash(leaf.key) === hash
+    if leaf.hash === hash
         # replace
         @assert isset(previous, previous_i)
-        @inbounds previous.data[previous_i] = Leaf{K, V}(key, val)
+        @inbounds previous.data[previous_i] = Leaf{K, V}(key, val, hash)
     else
         # collision grow
         while true
@@ -98,7 +99,7 @@ function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
             set!(previous, previous_i)
 
             i_new = entry_index(hash, level)
-            i_old = entry_index(Base.hash(leaf.key), level)
+            i_old = entry_index(leaf.hash, level)
             if i_new == i_old
                 previous = new_node
                 previous_i = i_new
@@ -106,7 +107,7 @@ function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
                 @assert level <= MAX_LEVEL
                 continue
             end
-            @inbounds new_node.data[i_new] = Leaf{K, V}(key, val)
+            @inbounds new_node.data[i_new] = Leaf{K, V}(key, val, hash)
             @inbounds new_node.data[i_old] = leaf
             set!(new_node, i_new)
             set!(new_node, i_old)
@@ -137,7 +138,7 @@ function Node(node::Node{K, V}, key::K, val::V) where {K, V}
                 node = shared_node
             end
         else
-            @inbounds node.data[i] = Leaf{K, V}(key, val)
+            @inbounds node.data[i] = Leaf{K, V}(key, val, hash)
             set!(node, i)
             return persistent
         end
@@ -146,10 +147,10 @@ function Node(node::Node{K, V}, key::K, val::V) where {K, V}
     end
     leaf = node::Leaf{K,V}
     # check if keys are ident
-    if Base.hash(leaf.key) === hash
+    if leaf.hash === hash
         # replace
         @assert isset(previous, previous_i)
-        @inbounds previous.data[previous_i] = Leaf{K, V}(key, val)
+        @inbounds previous.data[previous_i] = Leaf{K, V}(key, val, hash)
     else
         # collision grow
         while true
@@ -158,7 +159,7 @@ function Node(node::Node{K, V}, key::K, val::V) where {K, V}
             set!(previous, previous_i)
 
             i_new = entry_index(hash, level)
-            i_old = entry_index(Base.hash(leaf.key), level)
+            i_old = entry_index(leaf.hash, level)
             if i_new == i_old
                 previous = new_node
                 previous_i = i_new
@@ -166,7 +167,7 @@ function Node(node::Node{K, V}, key::K, val::V) where {K, V}
                 @assert level <= MAX_LEVEL
                 continue
             end
-            @inbounds new_node.data[i_new] = Leaf{K, V}(key, val)
+            @inbounds new_node.data[i_new] = Leaf{K, V}(key, val, hash)
             @inbounds new_node.data[i_old] = leaf
             set!(new_node, i_new)
             set!(new_node, i_old)
