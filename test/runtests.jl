@@ -5,6 +5,7 @@ using HashArrayMappedTries
     dict = HAMT{Int, Int}()
     @test_throws KeyError dict[1]
     @test length(dict) == 0
+    @test isempty(dict)
 
     dict[1] = 1
     @test dict[1] == 1

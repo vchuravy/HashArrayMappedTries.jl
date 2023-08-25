@@ -32,6 +32,10 @@ function unset!(n::Node, i)
     n.bitmap &= ~(UInt32(1) << (i-1))
 end
 
+# Local version
+isempty(n::Node) = n.bitmap == 0
+isempty(::Leaf) = false
+
 """
     path(node, hash, copyf)::(found, present, node, i, top, level)
 
@@ -65,6 +69,9 @@ new persistent tree.
 end
 
 function Base.getindex(node::Node{K,V}, key::K) where {K,V}
+    if isempty(node)
+        throw(KeyError(key))
+    end
     hash = Base.hash(key)
     found, present, node, i, _, _ = path(node, hash, identity)
     if found && present
@@ -75,6 +82,9 @@ function Base.getindex(node::Node{K,V}, key::K) where {K,V}
 end
 
 function Base.get(node::Node{K,V}, key::K, default::V) where {K,V}
+    if isempty(node)
+        return default
+    end
     hash = Base.hash(key)
     found, present, node, i, _, _ = path(node, hash, identity)
     if found && present
@@ -163,6 +173,14 @@ end
 
 Base.length(::Leaf) = 1
 Base.length(n::Node) = sum((length(n.data[i]) for i in 1:32 if isset(n, i)), init=0)
+
+Base.isempty(::Leaf) = false
+function Base.isempty(n::Node)
+    if isempty(n)
+        return true
+    end
+    return all(Base.isempty(n.data[i]) for i in 1:32 if isset(n, i))
+end
 
 function collect(n::Node{K,V}, accum::Vector{Pair{K, V}}) where {K, V}
     for i in 1:32
