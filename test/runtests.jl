@@ -19,6 +19,9 @@ using HashArrayMappedTries
     @test dict[1] == 1
     @test dict2[1] == 2
 
+    dict3 = HAMT(dict2, 1)
+    @test_throws KeyError dict3[1]
+
     dict[1] = 3
     @test dict[1] == 3
     @test dict2[1] == 2

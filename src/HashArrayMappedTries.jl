@@ -32,6 +32,18 @@ function unset!(n::Node, i)
     n.bitmap &= ~(UInt32(1) << (i-1))
 end
 
+"""
+    path(node, hash, copyf)::(found, present, node, i, top, level)
+
+Internal function that walks a HAMT and finds the slot for hash.
+Returns if a value is `present` and a value is `found`.
+
+It returns the `node` and the index `i` into `node.data`, as well
+as the current `level`.
+
+If a copy function is provided `copyf` use the return `top` for the
+new persistent tree.
+"""
 @inline function path(node::Node{K,V}, hash::UInt, copyf::F) where {K, V, F}
     level = UInt(0)
     node = top = copyf(node)
@@ -40,12 +52,12 @@ end
         if isset(node, i)
             next = @inbounds node.data[i]
             if next isa Leaf{K,V}
-                return (next.hash == hash), node, i, top, level # Key match
+                return (next.hash == hash), true, node, i, top, level # Key match
             end
             node = copyf(next::Node{K,V})
         else
             # found empty slot
-            return true, node, i, top, level
+            return true, false, node, i, top, level
         end
         level += 1
         @assert level <= MAX_LEVEL
@@ -54,8 +66,8 @@ end
 
 function Base.getindex(node::Node{K,V}, key::K) where {K,V}
     hash = Base.hash(key)
-    found, node, i, _, _ = path(node, hash, identity)
-    if found && isset(node, i)
+    found, present, node, i, _, _ = path(node, hash, identity)
+    if found && present
         leaf = @inbounds node.data[i]::Leaf{K,V}
         return leaf.val
     end
@@ -64,16 +76,21 @@ end
 
 function Base.get(node::Node{K,V}, key::K, default::V) where {K,V}
     hash = Base.hash(key)
-    found, node, i, _, _ = path(node, hash, identity)
-    if found && isset(node, i)
+    found, present, node, i, _, _ = path(node, hash, identity)
+    if found && present
         leaf = @inbounds node.data[i]::Leaf{K,V}
         return leaf.val
     end
     return default
 end
 
-@inline function insert!(update, node::Node{K,V}, i, level, key, val, hash) where {K,V}
-     if update
+"""
+
+Internal function that given an obtained path, either set the value
+or grows the HAMT by inserting a new node instead.
+"""
+@inline function insert!(found, node::Node{K,V}, i, level, key, val, hash) where {K,V}
+     if found # we found a slot, just set it to the new leaf
         # replace or insert
         @inbounds node.data[i] = Leaf{K, V}(key, val, hash)
         set!(node, i)
@@ -108,26 +125,39 @@ end
 
 function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
     hash = Base.hash(key)
-    update, node, i, _, level = path(node, hash, identity)
-    insert!(update, node, i, level, key, val, hash)
+    found, _, node, i, _, level = path(node, hash, identity)
+    insert!(found, node, i, level, key, val, hash)
     return val
 end
 
 function Base.delete!(node::Node{K,V}, key::K) where {K,V}
     hash = Base.hash(key)
-    found, node, i, _, _ = path(node, hash, identity)
-    if found && isset(node, i)
+    found, present, node, i, _, _ = path(node, hash, identity)
+    if found && present
         unset!(node, i)
         # Can't unset node.data[i] safely
         Base.unsafe_store!(Base.unsafe_convert(Ptr{Ptr{Cvoid}}, pointer(node.data, i)), C_NULL)
+        # TODO: If `node` is empty we might want to unlink it.
     end
 end
 
 # persistent
 function Node(node::Node{K, V}, key::K, val::V) where {K, V}
     hash = Base.hash(key)
-    update, node, i, top, level = path(node, hash, (n::Node{K,V} -> Node{K,V}(copy(n.data),n.bitmap)))
-    insert!(update, node, i, level, key, val, hash)
+    found, _, node, i, top, level = path(node, hash, (n::Node{K,V} -> Node{K,V}(copy(n.data),n.bitmap)))
+    insert!(found, node, i, level, key, val, hash)
+    return top
+end
+
+function Node(node::Node{K, V}, key::K) where {K, V}
+    hash = Base.hash(key)
+    found, present, node, i, top, _ = path(node, hash, (n::Node{K,V} -> Node{K,V}(copy(n.data),n.bitmap)))
+    if found && present
+        unset!(node, i)
+        # Can't unset node.data[i] safely
+        Base.unsafe_store!(Base.unsafe_convert(Ptr{Ptr{Cvoid}}, pointer(node.data, i)), C_NULL)
+        # TODO: If `node` is empty we might want to unlink it.
+    end
     return top
 end
 
