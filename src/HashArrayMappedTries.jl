@@ -9,17 +9,17 @@ const MAX_LEVEL = UInt(NBITS ÷ BITS_PER_LEVEL - 1) # inclusive
 
 entry_index(hash::UInt, level::UInt) = UInt((hash >> (level * BITS_PER_LEVEL)) & LEVEL_MASK) + 1
 
-mutable struct Leaf{K, V} # todo test immutable
+mutable struct Leaf{K, V}
     const key::K
     const val::V
     const hash::UInt # cache
 end
 
 mutable struct Node{K, V}
+    const data::Vector{Union{Leaf{K, V}, Node{K, V}}}
     bitmap::UInt32
-    data::Vector{Union{Leaf{K, V}, Node{K, V}}}
 end
-Node{K, V}() where {K, V} = Node(zero(UInt32), Vector{Union{Leaf{K, V}, Node{K, V}}}(undef, ENTRY_COUNT))
+Node{K, V}() where {K, V} = Node(Vector{Union{Leaf{K, V}, Node{K, V}}}(undef, ENTRY_COUNT), zero(UInt32))
 
 isset(n::Node, i) = isodd(n.bitmap >> (i-1))
 function set!(n::Node, i) 
@@ -27,82 +27,72 @@ function set!(n::Node, i)
     n.bitmap |= (UInt32(1) << (i-1))
 end
 
-function Base.getindex(node::Node{K,V}, key::K) where {K,V}
-    hash = Base.hash(key)
-    level = UInt(0)
-    while !(node isa Leaf{K,V})
-        i = entry_index(hash, level)
-        if isset(node, i)
-            node = @inbounds node.data[i]
-        else
-            throw(KeyError(key))
-        end
-        level += 1
-    end
-    leaf = node::Leaf{K,V}
-    if leaf.hash !== hash
-        throw(KeyError(key))
-    end
-    return leaf.val
+function unset!(n::Node, i) 
+    @assert 1 <= i <= 32
+    n.bitmap &= ~(UInt32(1) << (i-1))
 end
 
-function Base.get(node::Node{K,V}, key::K, default::V) where {K,V}
-    hash = Base.hash(key)
+@inline function path(node::Node{K,V}, hash::UInt, copyf::F) where {K, V, F}
     level = UInt(0)
-    while !(node isa Leaf{K,V})
+    node = top = copyf(node)
+    while true
         i = entry_index(hash, level)
         if isset(node, i)
-            node = @inbounds node.data[i]
+            next = @inbounds node.data[i]
+            if next isa Leaf{K,V}
+                return (next.hash == hash), node, i, top, level # Key match
+            end
+            node = copyf(next::Node{K,V})
         else
-            return default
-        end
-        level += 1
-    end
-    leaf = node::Leaf{K,V}
-    if leaf.hash !== hash
-        return default
-    end
-    return leaf.val
-end
-
-
-function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
-    hash = Base.hash(key)
-    level = UInt(0)
-    previous = node
-    previous_i = ~UInt(0)
-    while !(node isa Leaf{K,V})
-        i = entry_index(hash, level)
-        if isset(node, i) 
-            previous = node
-            previous_i = i
-            node = @inbounds node.data[i]
-        else
-            @inbounds node.data[i] = Leaf{K, V}(key, val, hash)
-            set!(node, i)
-            return
+            # found empty slot
+            return true, node, i, top, level
         end
         level += 1
         @assert level <= MAX_LEVEL
     end
-    leaf = node::Leaf{K,V}
-    # check if keys are ident
-    if leaf.hash === hash
-        # replace
-        @assert isset(previous, previous_i)
-        @inbounds previous.data[previous_i] = Leaf{K, V}(key, val, hash)
+end
+
+function Base.getindex(node::Node{K,V}, key::K) where {K,V}
+    hash = Base.hash(key)
+    found, node, i, _, _ = path(node, hash, identity)
+    if found && isset(node, i)
+        leaf = @inbounds node.data[i]::Leaf{K,V}
+        return leaf.val
+    end
+    throw(KeyError(key))
+end
+
+function Base.get(node::Node{K,V}, key::K, default::V) where {K,V}
+    hash = Base.hash(key)
+    found, node, i, _, _ = path(node, hash, identity)
+    if found && isset(node, i)
+        leaf = @inbounds node.data[i]::Leaf{K,V}
+        return leaf.val
+    end
+    return default
+end
+
+@inline function insert!(update, node::Node{K,V}, i, level, key, val, hash) where {K,V}
+     if update
+        # replace or insert
+        @inbounds node.data[i] = Leaf{K, V}(key, val, hash)
+        set!(node, i)
     else
-        # collision grow
+        # collision -> grow
+        leaf = @inbounds node.data[i]::Leaf{K,V}
         while true
             new_node = Node{K, V}()
-            @inbounds previous.data[previous_i] = new_node
-            set!(previous, previous_i)
+            @inbounds node.data[i] = new_node
+            set!(node, i)
+
+            level += 1
+            @assert level <= MAX_LEVEL
 
             i_new = entry_index(hash, level)
             i_old = entry_index(leaf.hash, level)
             if i_new == i_old
-                previous = new_node
-                previous_i = i_new
+                node = new_node
+                i = i_new
                 level += 1
                 @assert level <= MAX_LEVEL
                 continue
@@ -114,67 +104,31 @@ function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
             break
         end
     end
-    return leaf.val
+end
+
+function Base.setindex!(node::Node{K,V}, val::V, key::K) where {K,V}
+    hash = Base.hash(key)
+    update, node, i, _, level = path(node, hash, identity)
+    insert!(update, node, i, level, key, val, hash)
+    return val
+end
+
+function Base.delete!(node::Node{K,V}, key::K) where {K,V}
+    hash = Base.hash(key)
+    found, node, i, _, _ = path(node, hash, identity)
+    if found && isset(node, i)
+        unset!(node, i)
+        # Can't unset node.data[i] safely
+        Base.unsafe_store!(Base.unsafe_convert(Ptr{Ptr{Cvoid}}, pointer(node.data, i)), C_NULL)
+    end
 end
 
 # persistent
 function Node(node::Node{K, V}, key::K, val::V) where {K, V}
     hash = Base.hash(key)
-    level = UInt(0)
-
-    # We always own node, we copy nodes along our search path
-    node = previous = persistent = Node{K,V}(node.bitmap, copy(node.data))
-    previous_i = ~UInt(0)
-    while !(node isa Leaf{K,V})
-        i = entry_index(hash, level)
-        if isset(node, i)
-            previous = node
-            previous_i = i
-
-            shared_node = @inbounds node.data[i]
-            if shared_node isa Node
-                node = Node{K,V}(shared_node.bitmap, copy(shared_node.data))
-            else
-                node = shared_node
-            end
-        else
-            @inbounds node.data[i] = Leaf{K, V}(key, val, hash)
-            set!(node, i)
-            return persistent
-        end
-        level += 1
-        @assert level <= MAX_LEVEL
-    end
-    leaf = node::Leaf{K,V}
-    # check if keys are ident
-    if leaf.hash === hash
-        # replace
-        @assert isset(previous, previous_i)
-        @inbounds previous.data[previous_i] = Leaf{K, V}(key, val, hash)
-    else
-        # collision grow
-        while true
-            new_node = Node{K, V}()
-            @inbounds previous.data[previous_i] = new_node
-            set!(previous, previous_i)
-
-            i_new = entry_index(hash, level)
-            i_old = entry_index(leaf.hash, level)
-            if i_new == i_old
-                previous = new_node
-                previous_i = i_new
-                level += 1
-                @assert level <= MAX_LEVEL
-                continue
-            end
-            @inbounds new_node.data[i_new] = Leaf{K, V}(key, val, hash)
-            @inbounds new_node.data[i_old] = leaf
-            set!(new_node, i_new)
-            set!(new_node, i_old)
-            break
-        end
-    end
-    return persistent
+    update, node, i, top, level = path(node, hash, (n::Node{K,V} -> Node{K,V}(copy(n.data),n.bitmap)))
+    insert!(update, node, i, level, key, val, hash)
+    return top
 end
 
 Base.length(::Leaf) = 1

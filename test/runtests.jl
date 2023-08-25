@@ -9,6 +9,10 @@ using HashArrayMappedTries
     dict[1] = 1
     @test dict[1] == 1
     @test get(dict, 2, 1) == 1
+    
+    dict[3] = 2
+    delete!(dict, 3)
+    @test_throws KeyError dict[3]
 
     # persistent
     dict2 = HAMT(dict, 1, 2)
