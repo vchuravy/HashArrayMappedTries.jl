@@ -22,14 +22,16 @@ using HashArrayMappedTries
     dict[3] = 2
     delete!(dict, 3)
     @test_throws KeyError dict[3]
+    @test_throws KeyError delete!(dict, 3)
 
     # persistent
-    dict2 = HAMT(dict, 1, 2)
+    dict2 = insert(dict, 1, 2)
     @test dict[1] == 1
     @test dict2[1] == 2
 
-    dict3 = HAMT(dict2, 1)
+    dict3 = delete(dict2, 1)
     @test_throws KeyError dict3[1]
+    @test_throws KeyError delete(dict3, 1)
 
     dict[1] = 3
     @test dict[1] == 3
