@@ -170,8 +170,8 @@ function Base.iterate(trie::HAMT, state=nothing)
     while state !== nothing
         i = state.i
         while (i < 31)
-            if isset(state.trie, BitIndex(i))
-                ei = entry_index(state.trie, BitIndex(i))
+            if isset(state.trie, BitmapIndex(i))
+                ei = entry_index(state.trie, BitmapIndex(i))
                 trie = state.trie.data[ei]
                 state = HAMTIterationState(state.parent, state.trie, i+1)
                 if trie isa Leaf
