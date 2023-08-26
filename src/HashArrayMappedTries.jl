@@ -21,6 +21,10 @@ export HAMT, insert, delete
 # The `path` function searches for a matching entries, and for persistency
 # optionally copies the path so that it can be safely mutated.
 
+# TODO:
+# When `trie.data` becomes empty we could remove it from it's parent,
+# but we only know so fairly late. Maybe have a compact function?
+
 const ENTRY_COUNT = UInt(32)
 const BITMAP = UInt32
 const NBITS = sizeof(UInt) * 8
@@ -281,9 +285,8 @@ function Base.delete!(trie::HAMT{K,V}, key::K) where {K,V}
         deleteat!(trie.data, i)
         unset!(trie, bi)
         @assert count_ones(trie.bitmap) == length(trie.data)
-    else
-        throw(KeyError(key))
     end
+    return trie
 end
 
 """
@@ -321,8 +324,6 @@ function delete(trie::HAMT{K, V}, key::K) where {K, V}
         deleteat!(trie.data, i)
         unset!(trie, bi)
         @assert count_ones(trie.bitmap) == length(trie.data)
-    else
-        throw(KeyError(key))
     end
     return top
 end
