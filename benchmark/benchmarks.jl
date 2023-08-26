@@ -46,8 +46,7 @@ function create_benchmark(::Type{Dict}) where Dict
         group["creation (Persistent), size=$N"] = @benchmarkable create_persistent_dict($Dict, $N)
         group["setindex!, size=$N"]             = @benchmarkable dict[$N+1] = $N+1        setup=(dict=create_dict($Dict, $N))
         group["getindex, size=$N"]              = @benchmarkable dict[$N]                 setup=(dict=create_dict($Dict, $N))
-        # Weird bug..
-        # group["delete!, size=$N"]               = @benchmarkable delete!(dict, $N)        setup=(dict=create_dict($Dict, $N))
+        group["delete!, size=$N"]               = @benchmarkable delete!(dict, $N)        setup=(dict=create_dict($Dict, $N)) evals=1
         # Persistent
         group["insert, size=$N"]                = @benchmarkable insert(dict, $N+1, $N+1) setup=(dict=create_persistent_dict($Dict, $N))
         group["delete, size=$N"]                = @benchmarkable delete(dict, $N)         setup=(dict=create_persistent_dict($Dict, $N))
