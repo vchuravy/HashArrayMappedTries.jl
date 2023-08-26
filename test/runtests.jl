@@ -22,7 +22,7 @@ using HashArrayMappedTries
     dict[3] = 2
     delete!(dict, 3)
     @test_throws KeyError dict[3]
-    @test_throws KeyError delete!(dict, 3)
+    @test dict == delete!(dict, 3)
 
     # persistent
     dict2 = insert(dict, 1, 2)
@@ -31,7 +31,7 @@ using HashArrayMappedTries
 
     dict3 = delete(dict2, 1)
     @test_throws KeyError dict3[1]
-    @test_throws KeyError delete(dict3, 1)
+    @test dict3 != delete(dict3, 1)
 
     dict[1] = 3
     @test dict[1] == 3
@@ -71,4 +71,18 @@ end
         dict = delete(dict, i)
     end
     isempty(dict)
+
+    dict = HAMT{Int, Int}()
+    for i in 1:16384
+        dict[i] = i
+    end
+    delete!(dict, 16384)
+    @test !haskey(dict, 16384)
+
+    dict = HAMT{Int, Int}()
+    for i in 1:16384
+        dict = insert(dict, i, i)
+    end
+    dict = delete(dict, 16384)
+    @test !haskey(dict, 16384)
 end
