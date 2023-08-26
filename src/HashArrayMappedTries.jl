@@ -93,9 +93,13 @@ as the current `level`.
 If a copy function is provided `copyf` use the return `top` for the
 new persistent tree.
 """
-@inline function path(trie::HAMT{K,V}, h::UInt, copyf::F) where {K, V, F}
+@inline function path(trie::HAMT{K,V}, h::UInt, copy=false) where {K, V}
     level = UInt(0)
-    trie = top = copyf(trie)
+    if copy
+        trie = top = HAMT{K,V}(Base.copy(trie.data), trie.bitmap)
+    else
+        trie = top = trie
+    end
     while true
         bi = BitmapIndex(h, level)
         i = entry_index(trie, bi)
@@ -105,7 +109,11 @@ new persistent tree.
                 # equality or hash comparision?
                 return (next.h == h), true, trie, i, bi, top, level # Key match
             end
-            trie = copyf(next::HAMT{K,V})
+            if copy
+                next = HAMT{K,V}(Base.copy(next.data), next.bitmap)
+                @inbounds trie.data[i] = next
+            end
+            trie = next::HAMT{K,V}
         else
             # found empty slot
             return true, false, trie, i, bi, top, level
@@ -125,7 +133,7 @@ function Base.in(key_val::Pair{K,V}, trie::HAMT{K,V}, valcmp=(==)) where {K,V}
     key, val = key_val
 
     h = hash(key)
-    found, present, trie, i, _, _, _ = path(trie, h, identity)
+    found, present, trie, i, _, _, _ = path(trie, h)
     if found && present
         leaf = @inbounds trie.data[i]::Leaf{K,V}
         return valcmp(val, leaf.val) && return true
@@ -135,7 +143,7 @@ end
 
 function Base.haskey(trie::HAMT{K}, key::K) where K
     h = hash(key)
-    found, present, _, _, _, _, _ = path(trie, h, identity)
+    found, present, _, _, _, _, _ = path(trie, h)
     return found && present
 end
 
@@ -144,7 +152,7 @@ function Base.getindex(trie::HAMT{K,V}, key::K) where {K,V}
         throw(KeyError(key))
     end
     h = hash(key)
-    found, present, trie, i, _, _, _ = path(trie, h, identity)
+    found, present, trie, i, _, _, _ = path(trie, h)
     if found && present
         leaf = @inbounds trie.data[i]::Leaf{K,V}
         return leaf.val
@@ -157,7 +165,7 @@ function Base.get(trie::HAMT{K,V}, key::K, default::V) where {K,V}
         return default
     end
     h = hash(key)
-    found, present, trie, i, _, _, _ = path(trie, h, identity)
+    found, present, trie, i, _, _, _ = path(trie, h)
     if found && present
         leaf = @inbounds trie.data[i]::Leaf{K,V}
         return leaf.val
@@ -170,7 +178,7 @@ function Base.get(default::Base.Callable, trie::HAMT{K,V}, key::K) where {K,V}
         return default
     end
     h = hash(key)
-    found, present, trie, i, _, _, _ = path(trie, h, identity)
+    found, present, trie, i, _, _, _ = path(trie, h)
     if found && present
         leaf = @inbounds trie.data[i]::Leaf{K,V}
         return leaf.val
@@ -260,14 +268,14 @@ end
 
 function Base.setindex!(trie::HAMT{K,V}, val::V, key::K) where {K,V}
     h = hash(key)
-    found, present, trie, i, bi, _, level = path(trie, h, identity)
+    found, present, trie, i, bi, _, level = path(trie, h)
     insert!(found, present, trie, i, bi, level, key, val, h)
     return val
 end
 
 function Base.delete!(trie::HAMT{K,V}, key::K) where {K,V}
     h = hash(key)
-    found, present, trie, i, bi, _, _ = path(trie, h, identity)
+    found, present, trie, i, bi, _, _ = path(trie, h)
     if found && present
         deleteat!(trie.data, i)
         unset!(trie, bi)
@@ -289,7 +297,7 @@ dict = insert(dict, 10, 12)
 """
 function insert(trie::HAMT{K, V}, key::K, val::V) where {K, V}
     h = hash(key)
-    found, present, trie, i, bi, top, level = path(trie, h, (n::HAMT{K,V} -> HAMT{K,V}(copy(n.data), n.bitmap)))
+    found, present, trie, i, bi, top, level = path(trie, h, true)
     insert!(found, present, trie, i, bi, level, key, val, h)
     return top
 end
@@ -307,7 +315,7 @@ dict = delete(dict, 10)
 """
 function delete(trie::HAMT{K, V}, key::K) where {K, V}
     h = hash(key)
-    found, present, trie, i, bi, top, _ = path(trie, h, (n::HAMT{K,V} -> HAMT{K,V}(copy(n.data), n.bitmap)))
+    found, present, trie, i, bi, top, _ = path(trie, h, true)
     if found && present
         deleteat!(trie.data, i)
         unset!(trie, bi)
