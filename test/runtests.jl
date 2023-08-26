@@ -52,6 +52,11 @@ end
     @test values[1] == (1=>1)
     @test values[end] == (2048=>2048)
 
+    for i in 1:2048
+        delete!(dict, i)
+    end
+    @test isempty(dict)
+
     dict = HAMT{Int, Int}()
     for i in 1:2048
         dict = insert(dict, i, i)
@@ -61,4 +66,9 @@ end
     values = sort!(collect(dict))
     @test values[1] == (1=>1)
     @test values[end] == (2048=>2048)
+
+    for i in 1:2048
+        dict = delete(dict, i)
+    end
+    isempty(dict)
 end
