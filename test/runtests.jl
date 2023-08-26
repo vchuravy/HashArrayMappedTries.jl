@@ -11,7 +11,7 @@ using HashArrayMappedTries
     @test dict[1] == 1
     @test get(dict, 2, 1) == 1
     @test get(()->1, dict, 2) == 1
-    
+
     @test (1 => 1) ∈ dict
     @test (1 => 2) ∉ dict
     @test (2 => 1) ∉ dict
@@ -45,6 +45,16 @@ end
     dict = HAMT{Int, Int}()
     for i in 1:2048
         dict[i] = i
+    end
+    @test length(dict) == 2048
+    length(collect(dict)) == 2048
+    values = sort!(collect(dict))
+    @test values[1] == (1=>1)
+    @test values[end] == (2048=>2048)
+
+    dict = HAMT{Int, Int}()
+    for i in 1:2048
+        dict = insert(dict, i, i)
     end
     @test length(dict) == 2048
     length(collect(dict)) == 2048
