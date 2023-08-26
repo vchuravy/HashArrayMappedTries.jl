@@ -52,7 +52,7 @@ function unset!(trie::HAMT, bi::BitmapIndex)
 end
 
 function entry_index(trie::HAMT, bi::BitmapIndex)
-    mask = ~(UInt32(1) << bi.x)
+    mask = (UInt32(1) << bi.x) - Uint32(1)
     count_ones(trie.bitmap & mask) + 1
 end
 
