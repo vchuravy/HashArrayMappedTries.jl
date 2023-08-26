@@ -2,12 +2,33 @@ module HashArrayMappedTries
 
 export HAMT, insert, delete
 
+##
+# A HAMT is formed by tree of levels, where at each level
+# we use a portion of the bits of the hash for indexing
+#
+# We use a branching width (ENTRY_COUNT) of 32, giving us
+# 5bits of indexing per level
+# 0000_00000_00000_00000_00000_00000_00000_00000_00000_00000_00000_00000
+# L11  L10   L9    L8    L7    L6    L5    L4    L3    L2    L1    L0
+#
+# At each level we use a 32bit bitmap to store which elements are occupied.
+# Since our storage is "sparse" we need to map from index in [0,31] to
+# the actual storage index. We mask the bitmap wiht (1 << i) - 1 and count
+# the ones in the result. The number of set ones (+1) gives us the index
+# into the storage array.
+#
+# HAMT can be both persitent and non-persistent.
+# The `path` function searches for a matching entries, and for persistency
+# optionally copies the path so that it can be safely mutated.
+
 const ENTRY_COUNT = UInt(32)
+const BITMAP = UInt32
 const NBITS = sizeof(UInt) * 8
 @assert ispow2(ENTRY_COUNT)
 const BITS_PER_LEVEL = trailing_zeros(ENTRY_COUNT)
 const LEVEL_MASK = (UInt(1) << BITS_PER_LEVEL) - 1
 const MAX_LEVEL = UInt(NBITS ÷ BITS_PER_LEVEL - 1) # inclusive
+
 mutable struct Leaf{K, V}
     const key::K
     const val::V
@@ -21,12 +42,12 @@ A HashArrayMappedTrie that optionally supports persistence.
 """
 mutable struct HAMT{K, V}
     const data::Vector{Union{Leaf{K, V}, HAMT{K, V}}}
-    bitmap::UInt32
+    bitmap::BITMAP
 end
 HAMT{K, V}() where {K, V} = HAMT(Vector{Union{Leaf{K, V}, HAMT{K, V}}}(undef, 0), zero(UInt32))
 
 struct BitmapIndex
-    x::UInt
+    x::UInt8
     function BitmapIndex(x)
         @assert 0 <= x < 32
         new(x)
@@ -41,12 +62,12 @@ Base.:(<<)(v, bi::BitmapIndex) = v << bi.x
 Base.:(>>)(v, bi::BitmapIndex) = v >> bi.x
 
 isset(trie::HAMT, bi::BitmapIndex) = isodd(trie.bitmap >> bi)
-function set!(trie::HAMT, bi::BitmapIndex) 
+function set!(trie::HAMT, bi::BitmapIndex)
     trie.bitmap |= (UInt32(1) << bi)
     @assert count_ones(trie.bitmap) == length(trie.data)
 end
 
-function unset!(trie::HAMT, bi::BitmapIndex) 
+function unset!(trie::HAMT, bi::BitmapIndex)
     trie.bitmap &= ~(UInt32(1) << bi)
     @assert count_ones(trie.bitmap) == length(trie.data)
 end
@@ -81,6 +102,7 @@ new persistent tree.
         if isset(trie, bi)
             next = @inbounds trie.data[i]
             if next isa Leaf{K,V}
+                # equality or hash comparision?
                 return (next.h == h), true, trie, i, bi, top, level # Key match
             end
             trie = copyf(next::HAMT{K,V})
@@ -99,7 +121,7 @@ function Base.in(key_val::Pair{K,V}, trie::HAMT{K,V}, valcmp=(==)) where {K,V}
     if isempty(trie)
         return false
     end
-    
+
     key, val = key_val
 
     h = hash(key)
@@ -164,29 +186,22 @@ end
 
 function Base.iterate(trie::HAMT, state=nothing)
     if state === nothing
-        state = HAMTIterationState(nothing, trie, 0)
+        state = HAMTIterationState(nothing, trie, 1)
     end
-    # find the next valid index
     while state !== nothing
         i = state.i
-        while (i < 31)
-            if isset(state.trie, BitmapIndex(i))
-                ei = entry_index(state.trie, BitmapIndex(i))
-                trie = state.trie.data[ei]
-                state = HAMTIterationState(state.parent, state.trie, i+1)
-                if trie isa Leaf
-                    return (trie.key => trie.val, state)
-                else
-                    # we found a new level
-                    state = HAMTIterationState(state, trie, 0)
-                    break # exit inner while loop
-                end
-            end
-            i += 1
-        end
-        if i >= 32
-            # go back up a level
+        if i > length(state.trie.data)
             state = state.parent
+            continue
+        end
+        trie = state.trie.data[i]
+        state = HAMTIterationState(state.parent, state.trie, i+1)
+        if trie isa Leaf
+            return (trie.key => trie.val, state)
+        else
+            # we found a new level
+            state = HAMTIterationState(state, trie, 1)
+            continue
         end
     end
     return nothing
@@ -225,7 +240,6 @@ or grows the HAMT by inserting a new trie instead.
             bi_new = BitmapIndex(h, level)
             bi_old = BitmapIndex(leaf.h, level)
             if bi_new == bi_old # collision in new trie -> retry
-                @info "Collision" level bi_new bi_old h leaf.h
                 trie = new_trie
                 bi = bi_new
                 present = false
@@ -238,7 +252,7 @@ or grows the HAMT by inserting a new trie instead.
             i_old = entry_index(new_trie, bi_old)
             Base.insert!(new_trie.data, i_old, leaf)
             set!(new_trie, bi_old)
-            
+
             break
         end
     end
