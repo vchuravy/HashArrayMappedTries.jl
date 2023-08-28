@@ -263,6 +263,7 @@ or grows the HAMT by inserting a new trie instead.
             set!(trie, bi)
 
             level += 1
+            @assert level <= MAX_LEVEL
 
             bi_new = BitmapIndex(h, level)
             bi_old = BitmapIndex(leaf_h, level)

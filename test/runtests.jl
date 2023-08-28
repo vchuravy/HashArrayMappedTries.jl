@@ -86,3 +86,13 @@ end
     dict = delete(dict, 16384)
     @test !haskey(dict, 16384)
 end
+
+mutable struct CollidingHash
+end
+Base.hash(::CollidingHash) = UInt(0)
+
+@testset "CollidingHash" begin
+    dict = HAMT{CollidingHash, Nothing}()
+    dict[CollidingHash()] = nothing
+    @test_throws ErrorException dict[CollidingHash()] = nothing
+end
