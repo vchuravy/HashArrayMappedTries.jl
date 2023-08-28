@@ -89,7 +89,7 @@ end
 
 mutable struct CollidingHash
 end
-Base.hash(::CollidingHash) = UInt(0)
+Base.hash(::CollidingHash, h::UInt) = hash(UInt(0), h)
 
 @testset "CollidingHash" begin
     dict = HAMT{CollidingHash, Nothing}()
