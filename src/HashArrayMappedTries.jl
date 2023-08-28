@@ -47,7 +47,13 @@ mutable struct HAMT{K, V}
     const data::Vector{Union{Leaf{K, V}, HAMT{K, V}}}
     bitmap::BITMAP
 end
-HAMT{K, V}() where {K, V} = HAMT(Vector{Union{Leaf{K, V}, HAMT{K, V}}}(undef, 0), zero(UInt32))
+HAMT{K, V}() where {K, V} = HAMT(Vector{Union{Leaf{K, V}, HAMT{K, V}}}(undef, 0), zero(BITMAP))
+function HAMT{K, V}(k::K, v::V) where {K, V}
+    bi = BitmapIndex(hash(k), 0)
+    trie = HAMT(Vector{Union{Leaf{K, V}, HAMT{K, V}}}(Leaf{K,V}(k,v)), zero(BITMAP))
+    set!(trie, bi)
+    return trie
+end
 
 struct BitmapIndex
     x::UInt8
