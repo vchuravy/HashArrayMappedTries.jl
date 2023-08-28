@@ -96,3 +96,48 @@ Base.hash(::CollidingHash, h::UInt) = hash(UInt(0), h)
     dict[CollidingHash()] = nothing
     @test_throws ErrorException dict[CollidingHash()] = nothing
 end
+
+struct PredictableHash
+    x::UInt
+end
+Base.hash(x::PredictableHash, h::UInt) = x.x
+
+@testset "PredictableHash" begin
+    dict = HAMT{PredictableHash, Nothing}()
+    for i in 1:HashArrayMappedTries.ENTRY_COUNT
+        key = PredictableHash(UInt(i-1)) # Level 0
+        dict[key] = nothing
+    end
+    @test length(dict.data) == HashArrayMappedTries.ENTRY_COUNT
+    @test dict.bitmap == typemax(HashArrayMappedTries.BITMAP)
+    for entry in dict.data
+        @test entry isa HashArrayMappedTries.Leaf
+    end
+
+    dict = HAMT{PredictableHash, Nothing}()
+    for i in 1:HashArrayMappedTries.ENTRY_COUNT
+        key = PredictableHash(UInt(i-1) << HashArrayMappedTries.BITS_PER_LEVEL) # Level 1
+        dict[key] = nothing
+    end
+    @test length(dict.data) == 1
+    @test length(dict.data[1].data) == 32
+
+    max_level = (HashArrayMappedTries.NBITS ÷ HashArrayMappedTries.BITS_PER_LEVEL)
+    dict = HAMT{PredictableHash, Nothing}()
+    for i in 1:HashArrayMappedTries.ENTRY_COUNT
+        key = PredictableHash(UInt(i-1) << (max_level * HashArrayMappedTries.BITS_PER_LEVEL)) # Level 12
+        dict[key] = nothing
+    end
+    data = dict.data
+    for level in 1:max_level
+        @test length(data) == 1
+        data = only(data).data
+    end
+    last_level_nbits = HashArrayMappedTries.NBITS - (max_level * HashArrayMappedTries.BITS_PER_LEVEL)
+    if HashArrayMappedTries.NBITS == 64
+        @test last_level_nbits == 4
+    elseif HashArrayMappedTries.NBITS == 32
+        @test last_level_nbits == 2
+    end
+    @test length(data) == 2^last_level_nbits
+end
