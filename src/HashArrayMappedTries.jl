@@ -33,13 +33,8 @@ const BITS_PER_LEVEL = trailing_zeros(ENTRY_COUNT)
 const LEVEL_MASK = (UInt(1) << BITS_PER_LEVEL) - 1
 # Before we rehash
 const MAX_SHIFT = (NBITS ÷ BITS_PER_LEVEL - 1) *  BITS_PER_LEVEL
-mutable struct Leaf{K, V}
-    const key::K
-    const val::V
-end
 
-mutable struct CollidedLeaf{K, V}
-    parent::Union{CollidedLeaf{K,V}, Nothing}
+mutable struct Leaf{K, V}
     const key::K
     const val::V
 end
@@ -50,11 +45,11 @@ end
 A HashArrayMappedTrie that optionally supports persistence.
 """
 mutable struct HAMT{K, V}
-    const data::Vector{Union{HAMT{K, V}, Leaf{K, V}, CollidedLeaf{K,V}}}
+    const data::Vector{Union{HAMT{K, V}, Leaf{K, V}}}
     bitmap::BITMAP
 end
 HAMT{K, V}() where {K, V} = HAMT(
-    Vector{Union{Leaf{K, V}, HAMT{K, V}, CollidedLeaf{K,V}}}(undef, 0),
+    Vector{Union{Leaf{K, V}, HAMT{K, V}}}(undef, 0),
     zero(UInt32))
 
 struct BitmapIndex
@@ -87,7 +82,6 @@ end
 # Local version
 isempty(trie::HAMT) = trie.bitmap == 0
 isempty(::Leaf) = false
-isempty(::CollidedLeaf) = false
 
 struct HashState{K}
     key::K
