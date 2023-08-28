@@ -38,16 +38,24 @@ mutable struct Leaf{K, V}
     const val::V
 end
 
+mutable struct CollidedLeaf{K, V}
+    parent::Union{CollidedLeaf{K,V}, Nothing}
+    const key::K
+    const val::V
+end
+
 """
     HAMT{K,V}
 
 A HashArrayMappedTrie that optionally supports persistence.
 """
 mutable struct HAMT{K, V}
-    const data::Vector{Union{Leaf{K, V}, HAMT{K, V}}}
+    const data::Vector{Union{HAMT{K, V}, Leaf{K, V}, CollidedLeaf{K,V}}}
     bitmap::BITMAP
 end
-HAMT{K, V}() where {K, V} = HAMT(Vector{Union{Leaf{K, V}, HAMT{K, V}}}(undef, 0), zero(UInt32))
+HAMT{K, V}() where {K, V} = HAMT(
+    Vector{Union{Leaf{K, V}, HAMT{K, V}, CollidedLeaf{K,V}}}(undef, 0),
+    zero(UInt32))
 
 struct BitmapIndex
     x::UInt8
@@ -83,6 +91,7 @@ end
 # Local version
 isempty(trie::HAMT) = trie.bitmap == 0
 isempty(::Leaf) = false
+isempty(::CollidedLeaf) = false
 
 """
     path(trie, h, copyf)::(found, present, trie, i, top, level)
@@ -112,6 +121,8 @@ new persistent tree.
                 # Check if key match if not we will need to grow.
                 found = (next.key === key || isequal(next.key, key))
                 return found, true, trie, i, bi, top, level
+            elseif next isa CollidedLeaf{K,V}
+                error("Collision detected!")
             end
             if copy
                 next = HAMT{K,V}(Base.copy(next.data), next.bitmap)
@@ -238,6 +249,9 @@ or grows the HAMT by inserting a new trie instead.
         # collision -> grow
         leaf = @inbounds trie.data[i]::Leaf{K,V}
         leaf_h = hash(leaf.key)
+        if leaf_h == h
+            error("Collision detected")
+        end
         while true
             new_trie = HAMT{K, V}()
             if present
