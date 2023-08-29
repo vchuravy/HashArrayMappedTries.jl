@@ -55,13 +55,11 @@ Node{K, V}() where {K, V} = Node(
 const Layer{K,V} = Vector{Union{Node{K, V}, Leaf{K, V}}}
 mutable struct HAMT{K,V}
     const layer::Layer{K,V}
-    t::Int # size = 2^t and t = k*BITS_PER_LEVEL
+    t::Int # size = 2^t
     function HAMT(layer::Layer{K,V}) where {K,V}
         N = length(data)
         @assert ispow2(N)
         t = trailing_zeros(N)
-        k = t ÷ BITS_PER_LEVEL
-        @assert t == k*BITS_PER_LEVEL
         return new(layer, t)
     end
 end
@@ -76,10 +74,10 @@ function resize!(hamt::HAMT{K,V})
             entry = hamt.layer[iL]
             if entry isa Leaf{K,V}
                 layer[i] = entry
-                i +=  # skip
+                i += ENTRY_COUNT  # skip
             else
                 node = entry::Node{K,T}
-                for j in 0:ENTRY_COUNT
+                for j in 0:(ENTRY_COUNT-1)
                     bI = BitmapIndex(j)
                     if isset(node, bI)
                         layer[i] = node.data[entry_index(node, bI)]
