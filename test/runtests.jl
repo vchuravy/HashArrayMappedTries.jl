@@ -141,3 +141,34 @@ Base.hash(x::PredictableHash, h::UInt) = x.x
     end
     @test length(data) == 2^last_level_nbits
 end
+
+@testset "compaction" begin
+    nbits = HashArrayMappedTries.BITS_PER_LEVEL
+
+    dict = HAMT{PredictableHash, Nothing}()
+    key0 = PredictableHash(UInt(0)) # Level 1
+    dict[key0] = nothing
+    key1 = PredictableHash(UInt(1) << nbits)
+    dict[key1] = nothing
+
+    @test length(dict.data) == 1
+    trie = only(dict.data)
+    @test length(trie.data) == 2
+
+    delete!(dict, key0)
+    @test length(dict.data) == 1
+    trie = only(dict.data)
+    @test length(trie.data) == 1
+    # Compaction, couldn't have triggered yet.
+
+    delete!(dict, key1)
+    @test length(dict.data) == 0
+
+    dict[key0] = nothing
+    dict[key1] = nothing
+    delete!(dict, key0)
+    dict[key1] = nothing
+    @test length(dict.data) == 1
+    leaf = only(dict.data)
+    @test leaf isa HashArrayMappedTries.Leaf
+end

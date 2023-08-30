@@ -21,10 +21,6 @@ export HAMT, insert, delete
 # The `path` function searches for a matching entries, and for persistency
 # optionally copies the path so that it can be safely mutated.
 
-# TODO:
-# When `trie.data` becomes empty we could remove it from it's parent,
-# but we only know so fairly late. Maybe have a compact function?
-
 const ENTRY_COUNT = UInt(32)
 const BITMAP = UInt32
 const NBITS = sizeof(UInt) * 8
@@ -55,7 +51,7 @@ HAMT{K, V}() where {K, V} = HAMT(
 struct BitmapIndex
     x::UInt8
     function BitmapIndex(x)
-        @assert 0 <= x < 32
+        @assert 0 <= x < 32 || x == typemax(UInt8)
         new(x)
     end
 end
@@ -107,8 +103,21 @@ end
 
 BitmapIndex(h::HashState) = BitmapIndex((h.hash >> h.shift) & LEVEL_MASK)
 
+struct Path{K,V}
+    trie::HAMT{K,V}
+    top::HAMT{K,V}
+    parent::HAMT{K,V}
+    h::HashState{K}
+    found::Bool
+    present::Bool
+    i::Int
+    parent_i::Int
+    bi::BitmapIndex
+    parent_bi::BitmapIndex
+end
+
 """
-    path(trie, h, copyf)::(found, present, trie, i, top, level)
+    path(trie, h, copyf)::Path
 
 Internal function that walks a HAMT and finds the slot for hash.
 Returns if a value is `present` and a value is `found`.
@@ -121,19 +130,30 @@ new persistent tree.
 """
 @inline function path(trie::HAMT{K,V}, h::HashState, copy=false) where {K, V}
     if copy
-        trie = top = HAMT{K,V}(Base.copy(trie.data), trie.bitmap)
-    else
-        trie = top = trie
+        trie = HAMT{K,V}(Base.copy(trie.data), trie.bitmap)
     end
+    # `top` is returned for persistent operations / path-copying
+    top = trie
+
+    # `parent` and `parent_i` keep track of the trie that is length(trie) > 1
+    # so that we can collapse entries.
+    parent = trie
+    parent_bi = BitmapIndex(typemax(UInt8))
+    parent_i = -1
     while true
         bi = BitmapIndex(h)
         i = entry_index(trie, bi)
         if isset(trie, bi)
+            if length(trie.data) > 1 || parent_i == -1
+                parent = trie
+                parent_bi = bi
+                parent_i = i
+            end
             next = @inbounds trie.data[i]
             if next isa Leaf{K,V}
                 # Check if key match if not we will need to grow.
                 found = (next.key === h.key || isequal(next.key, h.key))
-                return found, true, trie, i, bi, top, h
+                return Path(trie, top, parent, h, found, true, i, parent_i, bi, parent_bi)
             end
             if copy
                 next = HAMT{K,V}(Base.copy(next.data), next.bitmap)
@@ -142,7 +162,7 @@ new persistent tree.
             trie = next::HAMT{K,V}
         else
             # found empty slot
-            return true, false, trie, i, bi, top, h
+            return Path(trie, top, parent, h, true, false, i, parent_i, bi, parent_bi)
         end
         h = HashArrayMappedTries.next(h)
     end
@@ -157,26 +177,26 @@ function Base.in(key_val::Pair{K,V}, trie::HAMT{K,V}, valcmp=(==)) where {K,V}
 
     key, val = key_val
 
-    found, present, trie, i, _, _, _ = path(trie, HashState(key))
-    if found && present
-        leaf = @inbounds trie.data[i]::Leaf{K,V}
+    p = path(trie, HashState(key))
+    if p.found && p.present
+        leaf = @inbounds p.trie.data[p.i]::Leaf{K,V}
         return valcmp(val, leaf.val) && return true
     end
     return false
 end
 
 function Base.haskey(trie::HAMT{K}, key::K) where K
-    found, present, _, _, _, _, _ = path(trie, HashState(key))
-    return found && present
+    p = path(trie, HashState(key))
+    return p.found && p.present
 end
 
 function Base.getindex(trie::HAMT{K,V}, key::K) where {K,V}
     if isempty(trie)
         throw(KeyError(key))
     end
-    found, present, trie, i, _, _, _ = path(trie, HashState(key))
-    if found && present
-        leaf = @inbounds trie.data[i]::Leaf{K,V}
+    p = path(trie, HashState(key))
+    if p.found && p.present
+        leaf = @inbounds p.trie.data[p.i]::Leaf{K,V}
         return leaf.val
     end
     throw(KeyError(key))
@@ -186,9 +206,9 @@ function Base.get(trie::HAMT{K,V}, key::K, default::V) where {K,V}
     if isempty(trie)
         return default
     end
-    found, present, trie, i, _, _, _ = path(trie, HashState(key))
-    if found && present
-        leaf = @inbounds trie.data[i]::Leaf{K,V}
+    p = path(trie, HashState(key))
+    if p.found && p.present
+        leaf = @inbounds p.trie.data[p.i]::Leaf{K,V}
         return leaf.val
     end
     return default
@@ -198,9 +218,9 @@ function Base.get(default::Base.Callable, trie::HAMT{K,V}, key::K) where {K,V}
     if isempty(trie)
         return default
     end
-    found, present, trie, i, _, _, _ = path(trie, HashState(key))
-    if found && present
-        leaf = @inbounds trie.data[i]::Leaf{K,V}
+    p = path(trie, HashState(key))
+    if p.found && p.present
+        leaf = @inbounds p.trie.data[p.i]::Leaf{K,V}
         return leaf.val
     end
     return default()
@@ -240,17 +260,28 @@ end
 Internal function that given an obtained path, either set the value
 or grows the HAMT by inserting a new trie instead.
 """
-@inline function insert!(found, present, trie::HAMT{K,V}, i, bi, h, val) where {K,V}
-    if found # we found a slot, just set it to the new leaf
+@inline function insert!(p::Path{K,V}, val) where {K,V}
+    trie = p.trie
+    i = p.i
+    h = p.h
+    bi = p.bi
+    if p.found # we found a slot, just set it to the new leaf
         # replace or insert
-        if present # replace
+        if p.present # replace
+            if trie !== p.parent
+                @assert length(trie) == 1
+                trie = p.parent
+                bi = p.parent_bi
+                i = p.parent_i
+            end
             @inbounds trie.data[i] = Leaf{K, V}(h.key, val)
         else
             Base.insert!(trie.data, i, Leaf{K, V}(h.key, val))
         end
         set!(trie, bi)
     else
-        @assert present
+        @assert p.present
+        present = p.present
         # collision -> grow
         leaf = @inbounds trie.data[i]::Leaf{K,V}
         leaf_h = HashState(leaf.key, h.depth, h.shift) # Reconstruct state
@@ -292,18 +323,23 @@ end
 
 function Base.setindex!(trie::HAMT{K,V}, val::V, key::K) where {K,V}
     h = HashState(key)
-    found, present, trie, i, bi, _, h = path(trie, h)
-    insert!(found, present, trie, i, bi, h, val)
+    p = path(trie, h)
+    insert!(p, val)
     return val
 end
 
 function Base.delete!(trie::HAMT{K,V}, key::K) where {K,V}
     h = HashState(key)
-    found, present, trie, i, bi, _, _ = path(trie, h)
-    if found && present
-        deleteat!(trie.data, i)
-        unset!(trie, bi)
-        @assert count_ones(trie.bitmap) == length(trie.data)
+    p = path(trie, h)
+    if p.found && p.present
+        if p.parent !== p.trie
+            @assert length(p.trie.data) == 1
+            deleteat!(p.parent.data, p.parent_i)
+            unset!(p.parent, p.parent_bi)
+        else
+            deleteat!(p.trie.data, p.i)
+            unset!(p.trie, p.bi)
+        end
     end
     return trie
 end
@@ -320,9 +356,9 @@ dict = insert(dict, 10, 12)
 """
 function insert(trie::HAMT{K, V}, key::K, val::V) where {K, V}
     h = HashState(key)
-    found, present, trie, i, bi, top, h = path(trie, h, true)
-    insert!(found, present, trie, i, bi, h, val)
-    return top
+    p = path(trie, h, true)
+    insert!(p, val)
+    return p.top
 end
 
 """
@@ -338,13 +374,18 @@ dict = delete(dict, 10)
 """
 function delete(trie::HAMT{K, V}, key::K) where {K, V}
     h = HashState(key)
-    found, present, trie, i, bi, top, _ = path(trie, h, true)
-    if found && present
-        deleteat!(trie.data, i)
-        unset!(trie, bi)
-        @assert count_ones(trie.bitmap) == length(trie.data)
+    p = path(trie, h, true)
+    if p.found && p.present
+        if p.parent !== p.trie
+            @assert length(p.trie.data) == 1
+            deleteat!(p.parent.data, p.parent_i)
+            unset!(p.parent, p.parent_bi)
+        else
+            deleteat!(p.trie.data, p.i)
+            unset!(p.trie, p.bi)
+        end
     end
-    return top
+    return p.top
 end
 
 Base.length(::Leaf) = 1
